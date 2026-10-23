@@ -2,9 +2,10 @@ use mynet::*;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -20,7 +21,7 @@ struct Device {
 }
 
 struct LocalSubnet {
-    iface_name: String,
+    local_ip: Ipv4Addr,
     network: Ipv4Addr,
     mask: Ipv4Addr,
 }
@@ -42,7 +43,7 @@ fn get_local_subnets() -> Vec<LocalSubnet> {
                 let ip4 = net4.ip();
                 if !ip4.is_loopback() && !ip4.is_link_local() {
                     subnets.push(LocalSubnet {
-                        iface_name: iface.name.clone(),
+                        local_ip: ip4,
                         network: net4.network(),
                         mask: net4.mask(),
                     });
@@ -53,14 +54,8 @@ fn get_local_subnets() -> Vec<LocalSubnet> {
     subnets
 }
 
-fn ping_sweep(subnets: &[LocalSubnet]) {
-    struct Target {
-        ip: String,
-        iface: String,
-    }
-
-    let mut targets = Vec::new();
-
+// Instantaneous non-blocking UDP sweep to awaken ARP table
+fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
     for sn in subnets {
         let net_u32 = u32::from(sn.network);
         let mask_u32 = u32::from(sn.mask);
@@ -70,28 +65,17 @@ fn ping_sweep(subnets: &[LocalSubnet]) {
             continue;
         }
 
-        for i in 1..host_count {
-            let target_ip = Ipv4Addr::from(net_u32 + i);
-            targets.push(Target {
-                ip: target_ip.to_string(),
-                iface: sn.iface_name.clone(),
-            });
+        if let Ok(socket) = UdpSocket::bind(SocketAddrV4::new(sn.local_ip, 0)) {
+            let _ = socket.set_broadcast(true);
+            let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
+            let _ = socket.send_to(b"ping", SocketAddrV4::new(bcast, 55555));
+
+            for i in 1..host_count {
+                let target_ip = Ipv4Addr::from(net_u32 + i);
+                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
+            }
         }
     }
-
-    targets.par_iter().for_each(|t| {
-        let _ = Command::new("ping")
-            .arg("-I")
-            .arg(&t.iface)
-            .arg("-c")
-            .arg("1")
-            .arg("-W")
-            .arg("1")
-            .arg(&t.ip)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    });
 }
 
 fn get_neighbor_devices() -> HashMap<String, Device> {
@@ -189,6 +173,24 @@ fn get_neighbor_devices() -> HashMap<String, Device> {
     devices
 }
 
+// Fast DNS lookup with strict 250ms deadline per host
+fn lookup_hostname_fast(ip_str: &str) -> String {
+    if let Ok(ip_addr) = ip_str.parse::<IpAddr>() {
+        let (tx, rx) = mpsc::channel();
+        let _ = thread::spawn(move || {
+            let res = dns_lookup::lookup_addr(&ip_addr).unwrap_or_else(|_| "—".to_string());
+            let _ = tx.send(res);
+        });
+
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(name) => name,
+            Err(_) => "—".to_string(),
+        }
+    } else {
+        "—".to_string()
+    }
+}
+
 fn main() {
     let stop_spinner = Arc::new(AtomicBool::new(false));
     let stop_spinner_clone = stop_spinner.clone();
@@ -211,7 +213,7 @@ fn main() {
     });
 
     let subnets = get_local_subnets();
-    ping_sweep(&subnets);
+    trigger_arp_sweep(&subnets);
 
     thread::sleep(Duration::from_millis(150));
 
@@ -230,7 +232,7 @@ fn main() {
 
     let mut dev_list: Vec<Device> = dev_map.into_values().collect();
 
-    // Resolve vendors & hostnames in parallel
+    // Parallel vendor and timeout-bounded DNS resolution
     dev_list.par_iter_mut().for_each(|d| {
         d.vendor = lookup_vendor(&d.mac);
 
@@ -241,17 +243,11 @@ fn main() {
             d.hostname = format!("{host} ●");
         } else if d.ip == gw_ip {
             d.hostname = "gateway / router".to_string();
-        } else if let Ok(ip_addr) = d.ip.parse::<std::net::IpAddr>() {
-            match dns_lookup::lookup_addr(&ip_addr) {
-                Ok(name) => d.hostname = name,
-                Err(_) => d.hostname = "—".to_string(),
-            }
         } else {
-            d.hostname = "—".to_string();
+            d.hostname = lookup_hostname_fast(&d.ip);
         }
     });
 
-    // Sort numerically by IPv4
     dev_list.sort_by_key(|d| d.ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::UNSPECIFIED));
 
     let badge = get_session_badge();
