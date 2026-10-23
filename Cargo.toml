@@ -1,6 +1,6 @@
 [package]
 name = "mynet"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["laguser"]
 description = "Minimal CLI network auditor and LAN device discoverer written in Rust"

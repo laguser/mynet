@@ -243,16 +243,8 @@ fn main() {
 
     println!();
     println!(
-        "    {C_SUB}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
-        "IP ADDRESS", "MAC ADDRESS", "INTERFACE", "DEVICE / VENDOR", "HOSTNAME"
-    );
-    println!(
-        "    {C_DIM}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
-        "─".repeat(15),
-        "─".repeat(17),
-        "─".repeat(9),
-        "─".repeat(23),
-        "─".repeat(16)
+        "    {C_MUTED}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
+        "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ"
     );
 
     for d in &dev_list {
