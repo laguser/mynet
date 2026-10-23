@@ -16,7 +16,7 @@ struct PublicIPInfo {
 fn fetch_public_ip() -> (String, String) {
     if let Ok(resp) = ureq::get("https://ipapi.co/json/")
         .set("User-Agent", "curl/8.0")
-        .timeout(Duration::from_millis(2000))
+        .timeout(Duration::from_millis(1500))
         .call()
     {
         if let Ok(info) = resp.into_json::<PublicIPInfo>() {
@@ -37,7 +37,7 @@ fn fetch_public_ip() -> (String, String) {
     }
 
     if let Ok(resp) = ureq::get("https://api.ipify.org")
-        .timeout(Duration::from_millis(1500))
+        .timeout(Duration::from_millis(1200))
         .call()
     {
         if let Ok(text) = resp.into_string() {
@@ -107,7 +107,6 @@ fn get_interfaces() -> Vec<IfaceDetail> {
 }
 
 struct KeyVal {
-    icon: &'static str,
     key: &'static str,
     value: String,
 }
@@ -116,9 +115,8 @@ fn render_row(k: &KeyVal, key_width: usize) -> String {
     let pad = key_width.saturating_sub(k.key.len());
     let padding = " ".repeat(pad);
     format!(
-        "{}{}{} {}{}{}{} {}{}{}",
-        C_ACCENT, k.icon, C_RESET,
-        C_MUTED, k.key, padding, C_RESET,
+        "{}{}{} {}{}{}",
+        C_MUTED, k.key, padding,
         C_TEXT, k.value, C_RESET
     )
 }
@@ -133,7 +131,7 @@ fn main() {
         let mut idx = 0;
         while !stop_spinner_clone.load(Ordering::Relaxed) {
             let f = frames[idx % frames.len()];
-            print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}Gathering network telemetry...{C_RESET} ");
+            print!("\r  {C_MUTED}{f}{C_RESET} {C_MUTED}querying network...{C_RESET} ");
             use std::io::Write;
             let _ = std::io::stdout().flush();
             idx += 1;
@@ -151,63 +149,43 @@ fn main() {
     stop_spinner.store(true, Ordering::Relaxed);
     let _ = spinner_handle.join();
 
-    let badge = get_session_badge();
-
     let mut left_items = vec![
-        KeyVal { icon: "󰩠", key: "wan ip", value: pub_ip },
+        KeyVal { key: "wan", value: pub_ip },
     ];
 
     if !pub_extra.is_empty() {
-        let loc = if pub_extra.len() > 34 {
-            format!("{}...", &pub_extra[..31])
+        let loc = if pub_extra.len() > 30 {
+            format!("{}...", &pub_extra[..27])
         } else {
             pub_extra
         };
-        left_items.push(KeyVal { icon: "󰍹", key: "location", value: loc });
+        left_items.push(KeyVal { key: "location", value: loc });
     }
 
-    left_items.push(KeyVal { icon: "󰌘", key: "gateway", value: gateway });
-    left_items.push(KeyVal { icon: "󰒍", key: "dns", value: dns });
-    left_items.push(KeyVal { icon: "", key: "session", value: format!("{C_SUB}{badge}{C_RESET}") });
+    left_items.push(KeyVal { key: "gateway", value: gateway });
+    left_items.push(KeyVal { key: "dns", value: dns });
 
     let mut right_items = Vec::new();
     for iface in ifaces {
-        let icon = if iface.name.starts_with("wl") {
-            "󰖩"
-        } else if iface.name.starts_with("vpn") || iface.name.starts_with("wg") || iface.name.starts_with("tun") {
-            "󰞀"
-        } else {
-            "󰈀"
-        };
-
-        let status_badge = if iface.status == "UP" {
-            format!("{C_GREEN}● UP{C_RESET}")
-        } else {
-            format!("{C_MUTED}○ DOWN{C_RESET}")
-        };
-
-        let lan_val = format!("{} {}", iface.ipv4, status_badge);
-        right_items.push(KeyVal { icon, key: Box::leak(iface.name.into_boxed_str()), value: lan_val });
+        let status_color = if iface.status == "UP" { C_GREEN } else { C_MUTED };
+        let lan_val = format!("{} {status_color}{}{C_RESET}", iface.ipv4, iface.status.to_lowercase());
+        right_items.push(KeyVal { key: Box::leak(iface.name.into_boxed_str()), value: lan_val });
         if iface.mac != "—" {
-            right_items.push(KeyVal { icon: "󰇄", key: "  mac", value: iface.mac });
+            right_items.push(KeyVal { key: "  mac", value: format!("{C_MUTED}{}{C_RESET}", iface.mac) });
         }
         if iface.ipv6 != "—" {
-            right_items.push(KeyVal { icon: "󰩠", key: "  ipv6", value: iface.ipv6 });
+            right_items.push(KeyVal { key: "  ipv6", value: format!("{C_MUTED}{}{C_RESET}", iface.ipv6) });
         }
     }
 
     let left_lines: Vec<String> = left_items.iter().map(|it| render_row(it, 9)).collect();
     let right_lines: Vec<String> = right_items.iter().map(|it| render_row(it, 9)).collect();
 
-    let left_max_w = left_lines.iter().map(|l| vlen(l)).max().unwrap_or(30);
+    let left_max_w = left_lines.iter().map(|l| vlen(l)).max().unwrap_or(24);
     let max_rows = left_lines.len().max(right_lines.len());
-    let total_w = left_max_w + 6 + 40;
 
     println!();
-    println!("  {C_ACCENT}󰛳{C_RESET}  {C_BOLD}NETWORK{C_RESET}  {C_SUB}[{badge}]{C_RESET}");
-    println!("  {C_DIM}{}{C_RESET}", "─".repeat(total_w));
-
-    let gap = "      ";
+    let gap = "     ";
     for r in 0..max_rows {
         let l_str = left_lines.get(r).map(|s| s.as_str()).unwrap_or("");
         let l_pad = " ".repeat(left_max_w.saturating_sub(vlen(l_str)));

@@ -1,14 +1,14 @@
 [package]
 name = "mynet"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["laguser"]
-description = "Fastfetch-styled minimal network auditor and local LAN device topology discoverer"
+description = "Minimal CLI network auditor and LAN device discoverer written in Rust"
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/laguser/mynet"
 homepage = "https://github.com/laguser/mynet"
-keywords = ["network", "fastfetch", "discovery", "arp", "cli"]
+keywords = ["network", "discovery", "arp", "ip", "cli"]
 categories = ["command-line-utilities", "network-programming"]
 
 [[bin]]

@@ -1,14 +1,14 @@
 # mynet
 
-Fastfetch-styled minimal network auditor and local LAN device topology discoverer written in Rust.
+Minimal CLI network auditor and LAN device discoverer written in Rust.
 
 ## Usage
 
 ```bash
-# Display public IP, geo, gateway, DNS & active interfaces
+# Show public IP, location, gateway, DNS & active interfaces
 myip
 
-# Discover and list all devices active in your local network
+# Discover active devices in the local network
 mynet
 ```
 
