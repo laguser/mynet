@@ -107,6 +107,7 @@ fn get_interfaces() -> Vec<IfaceDetail> {
 }
 
 struct KeyVal {
+    icon: &'static str,
     key: &'static str,
     value: String,
 }
@@ -114,11 +115,10 @@ struct KeyVal {
 fn render_row(k: &KeyVal, key_width: usize) -> String {
     let pad = key_width.saturating_sub(k.key.len());
     let padding = " ".repeat(pad);
-    format!(
-        "{}{}{} {}{}{}",
-        C_MUTED, k.key, padding,
-        C_TEXT, k.value, C_RESET
-    )
+    let icon = k.icon;
+    let key = k.key;
+    let val = &k.value;
+    format!("{C_ACCENT}{icon}{C_RESET} {C_MUTED}{key}{padding}{C_RESET} {C_TEXT}{val}{C_RESET}")
 }
 
 fn main() {
@@ -131,7 +131,7 @@ fn main() {
         let mut idx = 0;
         while !stop_spinner_clone.load(Ordering::Relaxed) {
             let f = frames[idx % frames.len()];
-            print!("\r  {C_MUTED}{f}{C_RESET} {C_MUTED}querying network...{C_RESET} ");
+            print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}querying network...{C_RESET} ");
             use std::io::Write;
             let _ = std::io::stdout().flush();
             idx += 1;
@@ -150,7 +150,7 @@ fn main() {
     let _ = spinner_handle.join();
 
     let mut left_items = vec![
-        KeyVal { key: "wan", value: pub_ip },
+        KeyVal { icon: "󰩠", key: "wan", value: pub_ip },
     ];
 
     if !pub_extra.is_empty() {
@@ -159,22 +159,35 @@ fn main() {
         } else {
             pub_extra
         };
-        left_items.push(KeyVal { key: "location", value: loc });
+        left_items.push(KeyVal { icon: "󰍹", key: "location", value: loc });
     }
 
-    left_items.push(KeyVal { key: "gateway", value: gateway });
-    left_items.push(KeyVal { key: "dns", value: dns });
+    left_items.push(KeyVal { icon: "󰌘", key: "gateway", value: gateway });
+    left_items.push(KeyVal { icon: "󰒍", key: "dns", value: dns });
 
     let mut right_items = Vec::new();
     for iface in ifaces {
-        let status_color = if iface.status == "UP" { C_GREEN } else { C_MUTED };
-        let lan_val = format!("{} {status_color}{}{C_RESET}", iface.ipv4, iface.status.to_lowercase());
-        right_items.push(KeyVal { key: Box::leak(iface.name.into_boxed_str()), value: lan_val });
+        let icon = if iface.name.starts_with("wl") {
+            "󰖩"
+        } else if iface.name.starts_with("vpn") || iface.name.starts_with("wg") || iface.name.starts_with("tun") {
+            "󰞀"
+        } else {
+            "󰈀"
+        };
+
+        let status_badge = if iface.status == "UP" {
+            format!("{C_GREEN}● UP{C_RESET}")
+        } else {
+            format!("{C_MUTED}○ DOWN{C_RESET}")
+        };
+
+        let lan_val = format!("{} {}", iface.ipv4, status_badge);
+        right_items.push(KeyVal { icon, key: Box::leak(iface.name.into_boxed_str()), value: lan_val });
         if iface.mac != "—" {
-            right_items.push(KeyVal { key: "  mac", value: format!("{C_MUTED}{}{C_RESET}", iface.mac) });
+            right_items.push(KeyVal { icon: "󰇄", key: "  mac", value: iface.mac });
         }
         if iface.ipv6 != "—" {
-            right_items.push(KeyVal { key: "  ipv6", value: format!("{C_MUTED}{}{C_RESET}", iface.ipv6) });
+            right_items.push(KeyVal { icon: "󰩠", key: "  ipv6", value: iface.ipv6 });
         }
     }
 

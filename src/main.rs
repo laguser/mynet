@@ -196,7 +196,7 @@ fn main() {
         let mut idx = 0;
         while !stop_spinner_clone.load(Ordering::Relaxed) {
             let f = frames[idx % frames.len()];
-            print!("\r  {C_MUTED}{f}{C_RESET} {C_MUTED}scanning network...{C_RESET} ");
+            print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}scanning network...{C_RESET} ");
             use std::io::Write;
             let _ = std::io::stdout().flush();
             idx += 1;
@@ -243,40 +243,50 @@ fn main() {
 
     println!();
     println!(
-        "  {C_MUTED}{:<16} {:<18} {:<8} {:<22} {}{C_RESET}",
-        "IP", "MAC", "IFACE", "VENDOR", "HOST"
+        "    {C_SUB}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
+        "IP ADDRESS", "MAC ADDRESS", "INTERFACE", "DEVICE / VENDOR", "HOSTNAME"
+    );
+    println!(
+        "    {C_DIM}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
+        "─".repeat(15),
+        "─".repeat(17),
+        "─".repeat(9),
+        "─".repeat(23),
+        "─".repeat(16)
     );
 
     for d in &dev_list {
         let is_gw = d.ip == gw_ip;
+        let icon = get_device_icon(&d.vendor, &d.hostname, d.is_local, is_gw);
 
-        let ip_col = if d.is_local {
-            format!("{C_GREEN}{:<16}{C_RESET}", d.ip)
-        } else if is_gw {
-            format!("{C_SUB}{:<16}{C_RESET}", d.ip)
+        let icon_color = if is_gw {
+            C_GREEN
+        } else if d.is_local {
+            C_SUB
         } else {
-            format!("{C_TEXT}{:<16}{C_RESET}", d.ip)
+            C_ACCENT
         };
 
+        let ip_col = format!("{C_TEXT}{:<16}{C_RESET}", d.ip);
         let mac_col = format!("{C_MUTED}{:<18}{C_RESET}", d.mac);
-        let iface_col = format!("{C_MUTED}{:<8}{C_RESET}", d.interface);
+        let iface_col = format!("{C_SUB}{:<10}{C_RESET}", d.interface);
 
-        let vendor_str = if d.vendor.len() > 21 {
-            format!("{}...", &d.vendor[..18])
+        let vendor_str = if d.vendor.len() > 23 {
+            format!("{}...", &d.vendor[..20])
         } else {
             d.vendor.clone()
         };
-        let vendor_col = format!("{C_TEXT}{:<22}{C_RESET}", vendor_str);
+        let vendor_col = format!("{C_ACCENT}{:<24}{C_RESET}", vendor_str);
 
         let host_col = if d.is_local {
-            format!("{C_GREEN}{}{C_RESET}", d.hostname)
+            format!("{C_GREEN}{}{C_RESET} {C_GREEN}●{C_RESET}", d.hostname)
         } else if is_gw {
-            format!("{C_SUB}{}{C_RESET}", d.hostname)
+            format!("{C_SUB}{}{C_RESET} {C_SUB}󰒋{C_RESET}", d.hostname)
         } else {
-            format!("{C_MUTED}{}{C_RESET}", d.hostname)
+            format!("{C_TEXT}{}{C_RESET}", d.hostname)
         };
 
-        println!("  {ip_col} {mac_col} {iface_col} {vendor_col} {host_col}");
+        println!("  {icon_color}{icon}{C_RESET} {ip_col} {mac_col} {iface_col} {vendor_col} {host_col}");
     }
 
     println!();
