@@ -1,51 +1,91 @@
 use mynet::*;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 #[derive(Deserialize, Default)]
-struct PublicIPInfo {
+struct IpApiResponse {
     ip: Option<String>,
     city: Option<String>,
     country_name: Option<String>,
     org: Option<String>,
 }
 
-fn fetch_public_ip() -> (String, String) {
-    if let Ok(resp) = ureq::get("https://ipapi.co/json/")
-        .set("User-Agent", "curl/8.0")
-        .timeout(Duration::from_millis(1500))
-        .call()
-    {
-        if let Ok(info) = resp.into_json::<PublicIPInfo>() {
-            if let Some(ip) = info.ip {
-                let mut locs = Vec::new();
-                if let Some(city) = info.city {
-                    locs.push(city);
-                }
-                if let Some(country) = info.country_name {
-                    locs.push(country);
-                }
-                if let Some(org) = info.org {
-                    locs.push(org);
-                }
-                return (ip, locs.join(", "));
-            }
-        }
-    }
+#[derive(Deserialize, Default)]
+struct IpWhoisResponse {
+    ip: Option<String>,
+    city: Option<String>,
+    country: Option<String>,
+    connection: Option<IpWhoisConn>,
+}
 
-    if let Ok(resp) = ureq::get("https://api.ipify.org")
-        .timeout(Duration::from_millis(1200))
-        .call()
-    {
-        if let Ok(text) = resp.into_string() {
-            let ip = text.trim().to_string();
-            if !ip.is_empty() {
-                return (ip, String::new());
+#[derive(Deserialize, Default)]
+struct IpWhoisConn {
+    isp: Option<String>,
+}
+
+// Races two fast public IP/Geo endpoints in parallel and returns the first responder
+fn fetch_public_ip() -> (String, String) {
+    let (tx, rx) = mpsc::channel();
+
+    let tx1 = tx.clone();
+    thread::spawn(move || {
+        if let Ok(resp) = ureq::get("https://ipwho.is/")
+            .timeout(Duration::from_millis(900))
+            .call()
+        {
+            if let Ok(info) = resp.into_json::<IpWhoisResponse>() {
+                if let Some(ip) = info.ip {
+                    let mut locs = Vec::new();
+                    if let Some(city) = info.city {
+                        locs.push(city);
+                    }
+                    if let Some(country) = info.country {
+                        locs.push(country);
+                    }
+                    if let Some(conn) = info.connection {
+                        if let Some(isp) = conn.isp {
+                            locs.push(isp);
+                        }
+                    }
+                    let _ = tx1.send((ip, locs.join(", ")));
+                }
             }
         }
+    });
+
+    let tx2 = tx.clone();
+    thread::spawn(move || {
+        if let Ok(resp) = ureq::get("https://ipapi.co/json/")
+            .set("User-Agent", "curl/8.0")
+            .timeout(Duration::from_millis(900))
+            .call()
+        {
+            if let Ok(info) = resp.into_json::<IpApiResponse>() {
+                if let Some(ip) = info.ip {
+                    let mut locs = Vec::new();
+                    if let Some(city) = info.city {
+                        locs.push(city);
+                    }
+                    if let Some(country) = info.country_name {
+                        locs.push(country);
+                    }
+                    if let Some(org) = info.org {
+                        locs.push(org);
+                    }
+                    let _ = tx2.send((ip, locs.join(", ")));
+                }
+            }
+        }
+    });
+
+    drop(tx);
+
+    if let Ok(res) = rx.recv_timeout(Duration::from_millis(950)) {
+        return res;
     }
 
     ("Unavailable".to_string(), String::new())
@@ -135,16 +175,19 @@ fn main() {
             use std::io::Write;
             let _ = std::io::stdout().flush();
             idx += 1;
-            thread::sleep(Duration::from_millis(80));
+            thread::sleep(Duration::from_millis(50));
         }
         print!("\r\x1b[2K\x1b[?25h");
         use std::io::Write;
         let _ = std::io::stdout().flush();
     });
 
+    let ifaces_handle = thread::spawn(get_interfaces);
+    let route_handle = thread::spawn(get_dns_and_gateway);
     let (pub_ip, pub_extra) = fetch_public_ip();
-    let ifaces = get_interfaces();
-    let (dns, gateway) = get_dns_and_gateway();
+
+    let ifaces = ifaces_handle.join().unwrap_or_default();
+    let (dns, gateway) = route_handle.join().unwrap_or_else(|_| ("—".to_string(), "—".to_string()));
 
     stop_spinner.store(true, Ordering::Relaxed);
     let _ = spinner_handle.join();

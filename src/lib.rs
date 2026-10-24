@@ -1,7 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
-use std::sync::OnceLock;
 
 pub const C_ACCENT: &str = "\x1b[35m";   // Magenta / Purple (Primary accent)
 pub const C_SUB: &str = "\x1b[36m";      // Cyan / Blue (Secondary accent)
@@ -11,8 +9,6 @@ pub const C_GREEN: &str = "\x1b[32m";    // Green (UP, Gateway, Local)
 pub const C_DIM: &str = "\x1b[2;37m";    // Dim (Borders, separators)
 pub const C_RESET: &str = "\x1b[0m";     // Reset
 pub const C_BOLD: &str = "\x1b[1m";      // Bold
-
-static OUI_MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
 
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::new();
@@ -33,37 +29,6 @@ pub fn strip_ansi(s: &str) -> String {
 
 pub fn vlen(s: &str) -> usize {
     strip_ansi(s).chars().count()
-}
-
-pub fn load_oui_map() -> &'static HashMap<String, String> {
-    OUI_MAP.get_or_init(|| {
-        let mut map = HashMap::new();
-        let paths = [
-            "/usr/share/hwdata/oui.txt",
-            "/var/lib/ieee-data/oui.txt",
-            "/usr/share/nmap/nmap-mac-prefixes",
-        ];
-
-        for path in paths {
-            if let Ok(file) = fs::File::open(path) {
-                let reader = BufReader::new(file);
-                for line in reader.lines().flatten() {
-                    if line.contains("(hex)") {
-                        let parts: Vec<&str> = line.split("(hex)").collect();
-                        if parts.len() >= 2 {
-                            let prefix = parts[0].trim().replace('-', ":").to_uppercase();
-                            let vendor = parts[1].trim().to_string();
-                            map.insert(prefix, vendor);
-                        }
-                    }
-                }
-                if !map.is_empty() {
-                    break;
-                }
-            }
-        }
-        map
-    })
 }
 
 pub fn clean_vendor_name(raw: &str) -> String {
@@ -107,28 +72,84 @@ pub fn clean_vendor_name(raw: &str) -> String {
     }
 }
 
-pub fn lookup_vendor(mac: &str) -> String {
-    if mac.is_empty() || mac == "—" {
-        return "—".to_string();
+// Ultra-fast targeted OUI lookup that scans only for active MAC prefixes (<2ms)
+pub fn lookup_vendors_batch(macs: &[String]) -> HashMap<String, String> {
+    let mut results = HashMap::new();
+    let mut needed_prefixes = HashSet::new();
+
+    for mac in macs {
+        if mac.is_empty() || mac == "—" {
+            results.insert(mac.clone(), "—".to_string());
+            continue;
+        }
+        let clean = mac.trim().to_uppercase();
+        let parts: Vec<&str> = clean.split(':').collect();
+        if parts.len() >= 3 {
+            if let Ok(b0) = u8::from_str_radix(parts[0], 16) {
+                if (b0 & 2) != 0 {
+                    results.insert(mac.clone(), "Randomized / Private".to_string());
+                    continue;
+                }
+            }
+            let dash_prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
+            needed_prefixes.insert(dash_prefix);
+        } else {
+            results.insert(mac.clone(), "Unknown".to_string());
+        }
     }
 
-    let clean = mac.trim().to_uppercase();
-    let parts: Vec<&str> = clean.split(':').collect();
-    if parts.len() >= 3 {
-        let oui_prefix = format!("{}:{}:{}", parts[0], parts[1], parts[2]);
-        let map = load_oui_map();
-        if let Some(v) = map.get(&oui_prefix) {
-            return clean_vendor_name(v);
+    if !needed_prefixes.is_empty() {
+        let paths = [
+            "/usr/share/hwdata/oui.txt",
+            "/var/lib/ieee-data/oui.txt",
+            "/usr/share/nmap/nmap-mac-prefixes",
+        ];
+
+        let mut prefix_to_vendor = HashMap::new();
+        for path in paths {
+            if let Ok(bytes) = fs::read(path) {
+                for line in bytes.split(|&b| b == b'\n') {
+                    if line.len() > 18 && line[2] == b'-' && line[5] == b'-' {
+                        if let Ok(prefix_str) = std::str::from_utf8(&line[0..8]) {
+                            let p_upper = prefix_str.to_uppercase();
+                            if needed_prefixes.contains(&p_upper) {
+                                if let Ok(full_line) = std::str::from_utf8(line) {
+                                    if let Some(idx) = full_line.find("(hex)") {
+                                        let vendor = full_line[idx + 5..].trim();
+                                        prefix_to_vendor.insert(p_upper, clean_vendor_name(vendor));
+                                        if prefix_to_vendor.len() == needed_prefixes.len() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !prefix_to_vendor.is_empty() {
+                    break;
+                }
+            }
         }
 
-        if let Ok(b0) = u8::from_str_radix(parts[0], 16) {
-            if (b0 & 2) != 0 {
-                return "Randomized / Private".to_string();
+        for mac in macs {
+            if results.contains_key(mac) {
+                continue;
+            }
+            let clean = mac.trim().to_uppercase();
+            let parts: Vec<&str> = clean.split(':').collect();
+            if parts.len() >= 3 {
+                let dash_prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
+                if let Some(v) = prefix_to_vendor.get(&dash_prefix) {
+                    results.insert(mac.clone(), v.clone());
+                } else {
+                    results.insert(mac.clone(), "Unknown".to_string());
+                }
             }
         }
     }
 
-    "Unknown".to_string()
+    results
 }
 
 pub fn get_device_icon(vendor: &str, hostname: &str, is_local: bool, is_gateway: bool) -> &'static str {

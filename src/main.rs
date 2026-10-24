@@ -57,7 +57,6 @@ fn get_local_subnets() -> Vec<LocalSubnet> {
     subnets
 }
 
-// Binds socket directly to physical interface via SO_BINDTODEVICE to bypass VPN policy routing
 fn bind_socket_to_interface(socket: &UdpSocket, iface_name: &str) {
     let fd = socket.as_raw_fd();
     let mut bytes = iface_name.as_bytes().to_vec();
@@ -88,22 +87,16 @@ fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
             let _ = socket.set_broadcast(true);
             let _ = socket.set_nonblocking(true);
 
-            // 1. Trigger mDNS multicast & subnet broadcast to wake sleeping Wi-Fi devices
             let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
             let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
             let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 55555));
 
-            // 2. Two paced passes across the subnet to avoid overflowing kernel ARP queue
-            for pass in 0..2 {
-                for i in 1..host_count {
-                    let target_ip = Ipv4Addr::from(net_u32 + i);
-                    let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
-                    if i % 32 == 0 {
-                        thread::sleep(Duration::from_millis(12));
-                    }
-                }
-                if pass == 0 {
-                    thread::sleep(Duration::from_millis(80));
+            // Ultra-fast single pass with tiny 3ms micro-pacing every 64 hosts (~12ms total)
+            for i in 1..host_count {
+                let target_ip = Ipv4Addr::from(net_u32 + i);
+                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
+                if i % 64 == 0 {
+                    thread::sleep(Duration::from_millis(3));
                 }
             }
         }
@@ -210,7 +203,7 @@ fn lookup_hostname_fast(ip_str: &str) -> String {
             let _ = tx.send(res);
         });
 
-        match rx.recv_timeout(Duration::from_millis(250)) {
+        match rx.recv_timeout(Duration::from_millis(80)) {
             Ok(name) => name,
             Err(_) => "—".to_string(),
         }
@@ -233,7 +226,7 @@ fn main() {
             use std::io::Write;
             let _ = std::io::stdout().flush();
             idx += 1;
-            thread::sleep(Duration::from_millis(80));
+            thread::sleep(Duration::from_millis(50));
         }
         print!("\r\x1b[2K\x1b[?25h");
         use std::io::Write;
@@ -243,14 +236,14 @@ fn main() {
     let subnets = get_local_subnets();
     trigger_arp_sweep(&subnets);
 
-    thread::sleep(Duration::from_millis(200));
+    // Minimal 60ms wait for local LAN ARP replies (<2ms on Ethernet/Wi-Fi)
+    thread::sleep(Duration::from_millis(60));
 
     let dev_map = get_neighbor_devices();
 
-    stop_spinner.store(true, Ordering::Relaxed);
-    let _ = spinner_handle.join();
-
     if dev_map.is_empty() {
+        stop_spinner.store(true, Ordering::Relaxed);
+        let _ = spinner_handle.join();
         println!("  {C_MUTED}no devices found{C_RESET}\n");
         return;
     }
@@ -259,9 +252,16 @@ fn main() {
     let gw_ip = gw_full.split_whitespace().next().unwrap_or("").to_string();
 
     let mut dev_list: Vec<Device> = dev_map.into_values().collect();
+    let all_macs: Vec<String> = dev_list.iter().map(|d| d.mac.clone()).collect();
+
+    // Batch resolve all vendors in <2ms + parallel hostnames in <=80ms
+    let vendor_map = lookup_vendors_batch(&all_macs);
 
     dev_list.par_iter_mut().for_each(|d| {
-        d.vendor = lookup_vendor(&d.mac);
+        d.vendor = vendor_map
+            .get(&d.mac)
+            .cloned()
+            .unwrap_or_else(|| "Unknown".to_string());
 
         if d.is_local {
             d.hostname = "this machine".to_string();
@@ -271,6 +271,9 @@ fn main() {
             d.hostname = lookup_hostname_fast(&d.ip);
         }
     });
+
+    stop_spinner.store(true, Ordering::Relaxed);
+    let _ = spinner_handle.join();
 
     dev_list.sort_by_key(|d| d.ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::UNSPECIFIED));
 
