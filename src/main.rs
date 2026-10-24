@@ -285,7 +285,12 @@ fn main() {
 
     for d in &dev_list {
         let is_gw = d.ip == gw_ip;
-        let icon = get_device_icon(&d.vendor, &d.hostname, d.is_local, is_gw);
+        let is_vpn = d.interface.starts_with("vpn") || d.interface.starts_with("wg") || d.interface.starts_with("tun");
+        let icon = if is_vpn {
+            "󰞀"
+        } else {
+            get_device_icon(&d.vendor, &d.hostname, d.is_local, is_gw)
+        };
 
         let icon_color = if is_gw {
             C_GREEN
@@ -303,21 +308,25 @@ fn main() {
         let mac_col = format!("{C_MUTED}{:<18}{C_RESET}", d.mac);
         let iface_col = format!("{C_SUB}{:<10}{C_RESET}", d.interface);
 
-        let vendor_str = if d.vendor.len() > 23 {
+        let vendor_str = if is_vpn && d.vendor == "—" {
+            "VPN Tunnel".to_string()
+        } else if d.vendor.len() > 23 {
             format!("{}...", &d.vendor[..20])
         } else {
             d.vendor.clone()
         };
-        let vendor_col = if d.vendor == "—" {
+        let vendor_col = if vendor_str == "—" {
             format!("{C_MUTED}{:<24}{C_RESET}", vendor_str)
         } else {
             format!("{C_ACCENT}{:<24}{C_RESET}", vendor_str)
         };
 
-        let host_col = if d.is_local {
-            format!("{C_GREEN}● ᴛʜɪs ᴍᴀᴄʜɪɴᴇ{C_RESET}")
+        let host_col = if d.is_local && is_vpn {
+            format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ᴠᴘɴ){C_RESET}")
+        } else if d.is_local {
+            format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ʟᴀɴ){C_RESET}")
         } else if is_gw {
-            format!("{C_SUB}󰒋 ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+            format!("{C_SUB}󰒋 ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
         } else if d.hostname == "—" {
             format!("{C_MUTED}—{C_RESET}")
         } else {

@@ -27,7 +27,8 @@ struct IpWhoisConn {
     isp: Option<String>,
 }
 
-fn fetch_public_ip() -> (String, String) {
+// Returns (ip, location, isp)
+fn fetch_public_ip() -> (String, String, String) {
     let (tx, rx) = mpsc::channel();
 
     let tx1 = tx.clone();
@@ -45,12 +46,11 @@ fn fetch_public_ip() -> (String, String) {
                     if let Some(country) = info.country {
                         locs.push(country);
                     }
-                    if let Some(conn) = info.connection {
-                        if let Some(isp) = conn.isp {
-                            locs.push(isp);
-                        }
-                    }
-                    let _ = tx1.send((ip, locs.join(", ")));
+                    let isp = info
+                        .connection
+                        .and_then(|c| c.isp)
+                        .unwrap_or_default();
+                    let _ = tx1.send((ip, locs.join(", "), isp));
                 }
             }
         }
@@ -72,10 +72,8 @@ fn fetch_public_ip() -> (String, String) {
                     if let Some(country) = info.country_name {
                         locs.push(country);
                     }
-                    if let Some(org) = info.org {
-                        locs.push(org);
-                    }
-                    let _ = tx2.send((ip, locs.join(", ")));
+                    let isp = info.org.unwrap_or_default();
+                    let _ = tx2.send((ip, locs.join(", "), isp));
                 }
             }
         }
@@ -87,11 +85,12 @@ fn fetch_public_ip() -> (String, String) {
         return res;
     }
 
-    ("Unavailable".to_string(), String::new())
+    ("Unavailable".to_string(), String::new(), String::new())
 }
 
 struct IfaceDetail {
     name: String,
+    kind: &'static str,
     mac: String,
     ipv4: String,
     ipv6: String,
@@ -133,8 +132,19 @@ fn get_interfaces() -> Vec<IfaceDetail> {
             ipv6s[0].clone()
         };
 
+        let kind = if iface.name.starts_with("wl") {
+            "Wi-Fi"
+        } else if iface.name.starts_with("vpn") || iface.name.starts_with("wg") || iface.name.starts_with("tun") {
+            "VPN"
+        } else if iface.name.starts_with("en") || iface.name.starts_with("eth") {
+            "LAN"
+        } else {
+            "Net"
+        };
+
         results.push(IfaceDetail {
             name: iface.name,
+            kind,
             mac,
             ipv4: ipv4_str,
             ipv6: ipv6_str,
@@ -188,7 +198,7 @@ fn main() {
 
     let ifaces_handle = thread::spawn(get_interfaces);
     let route_handle = thread::spawn(get_dns_and_gateway);
-    let (pub_ip, pub_extra) = fetch_public_ip();
+    let (pub_ip, pub_loc, pub_isp) = fetch_public_ip();
 
     let ifaces = ifaces_handle.join().unwrap_or_default();
     let (dns, gateway) = route_handle.join().unwrap_or_else(|_| ("—".to_string(), "—".to_string()));
@@ -199,21 +209,29 @@ fn main() {
     let mut left_items = vec![
         KeyVal {
             icon: "󰩠",
-            key: "ᴡᴀɴ ɪᴘ".to_string(),
+            key: "ᴘᴜʙʟɪᴄ ɪᴘ".to_string(),
             value: format!("{C_BOLD}{pub_ip}{C_RESET}"),
         },
     ];
 
-    if !pub_extra.is_empty() {
-        let loc = if pub_extra.len() > 30 {
-            format!("{}...", &pub_extra[..27])
-        } else {
-            pub_extra
-        };
+    if !pub_loc.is_empty() {
         left_items.push(KeyVal {
             icon: "󰍹",
             key: "ʟᴏᴄᴀᴛɪᴏɴ".to_string(),
-            value: loc,
+            value: pub_loc,
+        });
+    }
+
+    if !pub_isp.is_empty() {
+        let isp_short = if pub_isp.len() > 28 {
+            format!("{}...", &pub_isp[..25])
+        } else {
+            pub_isp
+        };
+        left_items.push(KeyVal {
+            icon: "󰒋",
+            key: "ᴘʀᴏᴠɪᴅᴇʀ".to_string(),
+            value: isp_short,
         });
     }
 
@@ -236,9 +254,9 @@ fn main() {
 
     let mut right_items = Vec::new();
     for iface in ifaces {
-        let icon = if iface.name.starts_with("wl") {
+        let icon = if iface.kind == "Wi-Fi" {
             "󰖩"
-        } else if iface.name.starts_with("vpn") || iface.name.starts_with("wg") || iface.name.starts_with("tun") {
+        } else if iface.kind == "VPN" {
             "󰞀"
         } else {
             "󰈀"
@@ -250,10 +268,11 @@ fn main() {
             format!("{C_MUTED}○ ᴅᴏᴡɴ{C_RESET}")
         };
 
+        let label = format!("{} ({})", iface.name, iface.kind);
         let lan_val = format!("{C_BOLD}{}{C_RESET}  {status_badge}", iface.ipv4);
         right_items.push(KeyVal {
             icon,
-            key: iface.name,
+            key: label,
             value: lan_val,
         });
 
@@ -277,14 +296,19 @@ fn main() {
         }
     }
 
-    let left_lines: Vec<String> = left_items.iter().map(|it| render_row(it, 9)).collect();
-    let right_lines: Vec<String> = right_items.iter().map(|it| render_row(it, 9)).collect();
+    let left_lines: Vec<String> = left_items.iter().map(|it| render_row(it, 10)).collect();
+    let right_lines: Vec<String> = right_items.iter().map(|it| render_row(it, 13)).collect();
 
-    let left_max_w = left_lines.iter().map(|l| vlen(l)).max().unwrap_or(24);
+    let left_max_w = left_lines.iter().map(|l| vlen(l)).max().unwrap_or(28);
     let max_rows = left_lines.len().max(right_lines.len());
 
     println!();
     let gap = "   │   ";
+    let left_hdr = format!("  {C_SUB}󰖟 ɪɴᴛᴇʀɴᴇᴛ & ʀᴏᴜᴛɪɴɢ{C_RESET}");
+    let left_hdr_pad = " ".repeat(left_max_w.saturating_sub(vlen(&left_hdr) - 2));
+    let right_hdr = format!("{C_SUB}󰛳 ʟᴏᴄᴀʟ ɪɴᴛᴇʀꜰᴀᴄᴇs{C_RESET}");
+    println!("{left_hdr}{left_hdr_pad}{C_MUTED}{gap}{C_RESET}{right_hdr}");
+
     for r in 0..max_rows {
         let l_str = left_lines.get(r).map(|s| s.as_str()).unwrap_or("");
         let l_pad = " ".repeat(left_max_w.saturating_sub(vlen(l_str)));

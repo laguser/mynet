@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "mynet"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "dns-lookup",
  "ipnetwork",
