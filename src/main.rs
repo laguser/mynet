@@ -295,7 +295,11 @@ fn main() {
             C_ACCENT
         };
 
-        let ip_col = format!("{C_TEXT}{:<16}{C_RESET}", d.ip);
+        let ip_col = if d.is_local || is_gw {
+            format!("{C_BOLD}{C_TEXT}{:<16}{C_RESET}", d.ip)
+        } else {
+            format!("{C_TEXT}{:<16}{C_RESET}", d.ip)
+        };
         let mac_col = format!("{C_MUTED}{:<18}{C_RESET}", d.mac);
         let iface_col = format!("{C_SUB}{:<10}{C_RESET}", d.interface);
 
@@ -304,12 +308,18 @@ fn main() {
         } else {
             d.vendor.clone()
         };
-        let vendor_col = format!("{C_ACCENT}{:<24}{C_RESET}", vendor_str);
+        let vendor_col = if d.vendor == "—" {
+            format!("{C_MUTED}{:<24}{C_RESET}", vendor_str)
+        } else {
+            format!("{C_ACCENT}{:<24}{C_RESET}", vendor_str)
+        };
 
         let host_col = if d.is_local {
-            format!("{C_GREEN}{}{C_RESET} {C_GREEN}●{C_RESET}", d.hostname)
+            format!("{C_GREEN}● ᴛʜɪs ᴍᴀᴄʜɪɴᴇ{C_RESET}")
         } else if is_gw {
-            format!("{C_SUB}{}{C_RESET} {C_SUB}󰒋{C_RESET}", d.hostname)
+            format!("{C_SUB}󰒋 ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+        } else if d.hostname == "—" {
+            format!("{C_MUTED}—{C_RESET}")
         } else {
             format!("{C_TEXT}{}{C_RESET}", d.hostname)
         };

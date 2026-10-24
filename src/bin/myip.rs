@@ -27,7 +27,6 @@ struct IpWhoisConn {
     isp: Option<String>,
 }
 
-// Races two fast public IP/Geo endpoints in parallel and returns the first responder
 fn fetch_public_ip() -> (String, String) {
     let (tx, rx) = mpsc::channel();
 
@@ -148,17 +147,22 @@ fn get_interfaces() -> Vec<IfaceDetail> {
 
 struct KeyVal {
     icon: &'static str,
-    key: &'static str,
+    key: String,
     value: String,
 }
 
 fn render_row(k: &KeyVal, key_width: usize) -> String {
-    let pad = key_width.saturating_sub(k.key.len());
+    let k_len = k.key.chars().count();
+    let pad = key_width.saturating_sub(k_len);
     let padding = " ".repeat(pad);
     let icon = k.icon;
-    let key = k.key;
+    let key = &k.key;
     let val = &k.value;
-    format!("{C_ACCENT}{icon}{C_RESET} {C_MUTED}{key}{padding}{C_RESET} {C_TEXT}{val}{C_RESET}")
+    if icon.is_empty() {
+        format!("  {C_MUTED}{key}{padding}{C_RESET}  {C_TEXT}{val}{C_RESET}")
+    } else {
+        format!("{C_ACCENT}{icon}{C_RESET} {C_MUTED}{key}{padding}{C_RESET}  {C_TEXT}{val}{C_RESET}")
+    }
 }
 
 fn main() {
@@ -193,7 +197,11 @@ fn main() {
     let _ = spinner_handle.join();
 
     let mut left_items = vec![
-        KeyVal { icon: "󰩠", key: "wan", value: pub_ip },
+        KeyVal {
+            icon: "󰩠",
+            key: "ᴡᴀɴ ɪᴘ".to_string(),
+            value: format!("{C_BOLD}{pub_ip}{C_RESET}"),
+        },
     ];
 
     if !pub_extra.is_empty() {
@@ -202,11 +210,29 @@ fn main() {
         } else {
             pub_extra
         };
-        left_items.push(KeyVal { icon: "󰍹", key: "location", value: loc });
+        left_items.push(KeyVal {
+            icon: "󰍹",
+            key: "ʟᴏᴄᴀᴛɪᴏɴ".to_string(),
+            value: loc,
+        });
     }
 
-    left_items.push(KeyVal { icon: "󰌘", key: "gateway", value: gateway });
-    left_items.push(KeyVal { icon: "󰒍", key: "dns", value: dns });
+    let gw_clean = if let Some((ip, dev)) = gateway.split_once(' ') {
+        format!("{ip} {C_MUTED}{dev}{C_RESET}")
+    } else {
+        gateway
+    };
+
+    left_items.push(KeyVal {
+        icon: "󰌘",
+        key: "ɢᴀᴛᴇᴡᴀʏ".to_string(),
+        value: gw_clean,
+    });
+    left_items.push(KeyVal {
+        icon: "󰒍",
+        key: "ᴅɴs".to_string(),
+        value: dns,
+    });
 
     let mut right_items = Vec::new();
     for iface in ifaces {
@@ -219,18 +245,35 @@ fn main() {
         };
 
         let status_badge = if iface.status == "UP" {
-            format!("{C_GREEN}● UP{C_RESET}")
+            format!("{C_GREEN}● ᴜᴘ{C_RESET}")
         } else {
-            format!("{C_MUTED}○ DOWN{C_RESET}")
+            format!("{C_MUTED}○ ᴅᴏᴡɴ{C_RESET}")
         };
 
-        let lan_val = format!("{} {}", iface.ipv4, status_badge);
-        right_items.push(KeyVal { icon, key: Box::leak(iface.name.into_boxed_str()), value: lan_val });
-        if iface.mac != "—" {
-            right_items.push(KeyVal { icon: "󰇄", key: "  mac", value: iface.mac });
+        let lan_val = format!("{C_BOLD}{}{C_RESET}  {status_badge}", iface.ipv4);
+        right_items.push(KeyVal {
+            icon,
+            key: iface.name,
+            value: lan_val,
+        });
+
+        let has_mac = iface.mac != "—";
+        let has_ipv6 = iface.ipv6 != "—";
+
+        if has_mac {
+            let branch = if has_ipv6 { "├─" } else { "╰─" };
+            right_items.push(KeyVal {
+                icon: "",
+                key: format!("{branch} ᴍᴀᴄ"),
+                value: format!("{C_MUTED}{}{C_RESET}", iface.mac),
+            });
         }
-        if iface.ipv6 != "—" {
-            right_items.push(KeyVal { icon: "󰩠", key: "  ipv6", value: iface.ipv6 });
+        if has_ipv6 {
+            right_items.push(KeyVal {
+                icon: "",
+                key: "╰─ ɪᴘᴠ6".to_string(),
+                value: format!("{C_MUTED}{}{C_RESET}", iface.ipv6),
+            });
         }
     }
 
@@ -241,12 +284,12 @@ fn main() {
     let max_rows = left_lines.len().max(right_lines.len());
 
     println!();
-    let gap = "     ";
+    let gap = "   │   ";
     for r in 0..max_rows {
         let l_str = left_lines.get(r).map(|s| s.as_str()).unwrap_or("");
         let l_pad = " ".repeat(left_max_w.saturating_sub(vlen(l_str)));
         let r_str = right_lines.get(r).map(|s| s.as_str()).unwrap_or("");
-        println!("  {l_str}{l_pad}{gap}{r_str}");
+        println!("  {l_str}{l_pad}{C_MUTED}{gap}{C_RESET}{r_str}");
     }
     println!();
 }
