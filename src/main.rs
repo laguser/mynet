@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::os::unix::io::AsRawFd;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -21,6 +22,7 @@ struct Device {
 }
 
 struct LocalSubnet {
+    iface_name: String,
     local_ip: Ipv4Addr,
     network: Ipv4Addr,
     mask: Ipv4Addr,
@@ -43,6 +45,7 @@ fn get_local_subnets() -> Vec<LocalSubnet> {
                 let ip4 = net4.ip();
                 if !ip4.is_loopback() && !ip4.is_link_local() {
                     subnets.push(LocalSubnet {
+                        iface_name: iface.name.clone(),
                         local_ip: ip4,
                         network: net4.network(),
                         mask: net4.mask(),
@@ -52,6 +55,22 @@ fn get_local_subnets() -> Vec<LocalSubnet> {
         }
     }
     subnets
+}
+
+// Binds socket directly to physical interface via SO_BINDTODEVICE to bypass VPN policy routing
+fn bind_socket_to_interface(socket: &UdpSocket, iface_name: &str) {
+    let fd = socket.as_raw_fd();
+    let mut bytes = iface_name.as_bytes().to_vec();
+    bytes.push(0);
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len() as libc::socklen_t,
+        );
+    }
 }
 
 fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
@@ -65,13 +84,27 @@ fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
         }
 
         if let Ok(socket) = UdpSocket::bind(SocketAddrV4::new(sn.local_ip, 0)) {
+            bind_socket_to_interface(&socket, &sn.iface_name);
             let _ = socket.set_broadcast(true);
-            let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
-            let _ = socket.send_to(b"ping", SocketAddrV4::new(bcast, 55555));
+            let _ = socket.set_nonblocking(true);
 
-            for i in 1..host_count {
-                let target_ip = Ipv4Addr::from(net_u32 + i);
-                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
+            // 1. Trigger mDNS multicast & subnet broadcast to wake sleeping Wi-Fi devices
+            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
+            let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
+            let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 55555));
+
+            // 2. Two paced passes across the subnet to avoid overflowing kernel ARP queue
+            for pass in 0..2 {
+                for i in 1..host_count {
+                    let target_ip = Ipv4Addr::from(net_u32 + i);
+                    let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
+                    if i % 32 == 0 {
+                        thread::sleep(Duration::from_millis(12));
+                    }
+                }
+                if pass == 0 {
+                    thread::sleep(Duration::from_millis(80));
+                }
             }
         }
     }
@@ -210,7 +243,7 @@ fn main() {
     let subnets = get_local_subnets();
     trigger_arp_sweep(&subnets);
 
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(200));
 
     let dev_map = get_neighbor_devices();
 

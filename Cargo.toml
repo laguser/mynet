@@ -1,6 +1,6 @@
 [package]
 name = "mynet"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["laguser"]
 description = "Minimal CLI network auditor and LAN device discoverer written in Rust"
@@ -27,3 +27,4 @@ rayon = "1.8"
 pnet_datalink = "0.34"
 ipnetwork = "0.20"
 dns-lookup = "2.0"
+libc = "0.2"

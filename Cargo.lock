@@ -285,10 +285,11 @@ dependencies = [
 
 [[package]]
 name = "mynet"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dns-lookup",
  "ipnetwork",
+ "libc",
  "pnet_datalink",
  "rayon",
  "serde",
