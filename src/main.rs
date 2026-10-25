@@ -100,6 +100,7 @@ fn bind_socket_to_interface(socket: &UdpSocket, iface_name: &str) {
     let fd = socket.as_raw_fd();
     let mut bytes = iface_name.as_bytes().to_vec();
     bytes.push(0);
+    let sndbuf: libc::c_int = 1024 * 1024;
     unsafe {
         libc::setsockopt(
             fd,
@@ -107,6 +108,13 @@ fn bind_socket_to_interface(socket: &UdpSocket, iface_name: &str) {
             libc::SO_BINDTODEVICE,
             bytes.as_ptr() as *const libc::c_void,
             bytes.len() as libc::socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &sndbuf as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&sndbuf) as libc::socklen_t,
         );
     }
 }
@@ -121,6 +129,37 @@ fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
             continue;
         }
 
+        let mut iface_bytes = sn.iface_name.as_bytes().to_vec();
+        iface_bytes.push(0);
+
+        // Open unprivileged ICMP ping socket (supported on Linux kernel without root)
+        let icmp_fd = unsafe {
+            libc::socket(
+                libc::AF_INET,
+                libc::SOCK_DGRAM | libc::SOCK_NONBLOCK,
+                libc::IPPROTO_ICMP,
+            )
+        };
+        if icmp_fd >= 0 {
+            let sndbuf: libc::c_int = 1024 * 1024;
+            unsafe {
+                libc::setsockopt(
+                    icmp_fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_BINDTODEVICE,
+                    iface_bytes.as_ptr() as *const libc::c_void,
+                    iface_bytes.len() as libc::socklen_t,
+                );
+                libc::setsockopt(
+                    icmp_fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    &sndbuf as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&sndbuf) as libc::socklen_t,
+                );
+            }
+        }
+
         if let Ok(socket) = UdpSocket::bind(SocketAddrV4::new(sn.local_ip, 0)) {
             let _ = socket.set_nonblocking(true);
             bind_socket_to_interface(&socket, &sn.iface_name);
@@ -128,20 +167,68 @@ fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
 
             // Multicast & Broadcast discovery signals (mDNS + NetBIOS + UDP echo)
             let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
-            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
-            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 55555));
-            let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 137));
-            let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 55555));
+            let _ = socket.send_to(b"\0", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
+            let _ = socket.send_to(b"\0", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 55555));
+            let _ = socket.send_to(b"\0", SocketAddrV4::new(bcast, 137));
+            let _ = socket.send_to(b"\0", SocketAddrV4::new(bcast, 55555));
 
-            // Multi-vector probes (mDNS + NetBIOS + high UDP) to awaken all types of devices
+            // Standard ICMP Echo Request payload: type=8, code=0, id=1337, seq=1
+            let icmp_packet: [u8; 8] = [8, 0, 0, 0, 0x05, 0x39, 0x00, 0x01];
+
+            // Multi-vector sweep: ICMP Echo + mDNS/NetBIOS unicast probes
             for i in 1..host_count {
                 let target_ip = Ipv4Addr::from(net_u32 + i);
-                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 5353));
-                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 137));
-                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
-                if i % 32 == 0 {
-                    thread::sleep(Duration::from_millis(4));
+
+                // 1. Send ICMP Echo Request if available
+                if icmp_fd >= 0 {
+                    let mut sin: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                    sin.sin_family = libc::AF_INET as libc::sa_family_t;
+                    sin.sin_addr.s_addr = u32::from(target_ip).to_be();
+
+                    for _ in 0..3 {
+                        let res = unsafe {
+                            libc::sendto(
+                                icmp_fd,
+                                icmp_packet.as_ptr() as *const libc::c_void,
+                                icmp_packet.len(),
+                                0,
+                                &sin as *const libc::sockaddr_in as *const libc::sockaddr,
+                                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                            )
+                        };
+                        if res >= 0 {
+                            break;
+                        }
+                        let err = unsafe { *libc::__errno_location() };
+                        if err == libc::EAGAIN || err == libc::EWOULDBLOCK {
+                            thread::sleep(Duration::from_micros(150));
+                        } else {
+                            break;
+                        }
+                    }
                 }
+
+                // 2. Send UDP probe (mDNS port 5353) with retry on WouldBlock
+                for _ in 0..3 {
+                    match socket.send_to(b"\0", SocketAddrV4::new(target_ip, 5353)) {
+                        Ok(_) => break,
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_micros(150));
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                // Smooth pacing to prevent kernel ARP queue drops
+                if i % 32 == 0 {
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+
+        if icmp_fd >= 0 {
+            unsafe {
+                libc::close(icmp_fd);
             }
         }
     }
@@ -299,8 +386,8 @@ fn main() {
     let subnets = get_local_subnets();
     trigger_arp_sweep(&subnets);
 
-    // 100ms wait ensures even sleeping Wi-Fi / power-saving mobile devices reply
-    thread::sleep(Duration::from_millis(100));
+    // 120ms wait ensures even sleeping Wi-Fi / power-saving mobile devices reply
+    thread::sleep(Duration::from_millis(120));
 
     let dev_map = get_neighbor_devices();
 

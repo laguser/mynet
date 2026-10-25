@@ -61,6 +61,20 @@ pub fn clean_vendor_name(raw: &str) -> String {
         "Raspberry Pi".to_string()
     } else if lower.contains("micro-star") {
         "MSI PC".to_string()
+    } else if lower.contains("inventec") {
+        "Inventec Laptop".to_string()
+    } else if lower.contains("compal") {
+        "Compal Laptop".to_string()
+    } else if lower.contains("quanta") {
+        "Quanta PC".to_string()
+    } else if lower.contains("lenovo") {
+        "Lenovo PC".to_string()
+    } else if lower.contains("dell") {
+        "Dell PC".to_string()
+    } else if lower.contains("hewlett-packard") || lower == "hp" {
+        "HP PC".to_string()
+    } else if lower.contains("acer") {
+        "Acer PC".to_string()
     } else if lower.contains("apple") {
         "Apple Device".to_string()
     } else if lower.contains("intel") {
@@ -164,7 +178,7 @@ pub fn get_device_icon(vendor: &str, hostname: &str, is_local: bool, is_gateway:
         "󰐿"
     } else if v_lower.contains("apple") || h_lower.contains("macbook") || h_lower.contains("iphone") {
         "󰀵"
-    } else if is_local || v_lower.contains("pc") || v_lower.contains("msi") {
+    } else if is_local || v_lower.contains("pc") || v_lower.contains("msi") || v_lower.contains("laptop") || v_lower.contains("inventec") || v_lower.contains("compal") || v_lower.contains("lenovo") || v_lower.contains("dell") {
         "󰌢"
     } else if v_lower.contains("private") || v_lower.contains("randomized") {
         "󰤨"
