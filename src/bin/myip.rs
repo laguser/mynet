@@ -120,22 +120,31 @@ struct IfaceJson {
 
 struct CliArgs {
     json: bool,
+    no_icons: bool,
     help: bool,
 }
 
 fn parse_args() -> CliArgs {
     let mut json = false;
+    let mut no_icons = false;
     let mut help = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-j" | "--json" => json = true,
+            "--no-icons" | "--ni" | "-n" => no_icons = true,
             "-h" | "--help" => help = true,
             _ => {}
         }
     }
 
-    CliArgs { json, help }
+    no_icons = should_disable_icons(no_icons);
+
+    CliArgs {
+        json,
+        no_icons,
+        help,
+    }
 }
 
 fn print_help() {
@@ -146,8 +155,9 @@ fn print_help() {
     println!("{C_SUB}USAGE:{C_RESET}");
     println!("  myip [options]\n");
     println!("{C_SUB}OPTIONS:{C_RESET}");
-    println!("  {C_TEXT}-j, --json{C_RESET}     Output results as JSON (ideal for scripts, Waybar, Polybar)");
-    println!("  {C_TEXT}-h, --help{C_RESET}     Print this help message\n");
+    println!("  {C_TEXT}--no-icons, --ni{C_RESET}    Disable Nerd Font icons (safe fallback for standard fonts / TTY)");
+    println!("  {C_TEXT}-j, --json{C_RESET}          Output results as JSON (ideal for scripts, Waybar, Polybar)");
+    println!("  {C_TEXT}-h, --help{C_RESET}          Print this help message\n");
 }
 
 fn get_interfaces() -> Vec<IfaceDetail> {
@@ -302,9 +312,15 @@ fn main() {
         return;
     }
 
+    let (ico_ip, ico_loc, ico_isp, ico_gw, ico_dns, ico_ping) = if args.no_icons {
+        ("●", "●", "●", "●", "●", "●")
+    } else {
+        ("󰩠", "󰍹", "󰒋", "󰌘", "󰒍", "󰓅")
+    };
+
     let mut left_items = vec![
         KeyVal {
-            icon: "󰩠",
+            icon: ico_ip,
             key: "ᴘᴜʙʟɪᴄ ɪᴘ".to_string(),
             value: format!("{C_BOLD}{pub_ip}{C_RESET}"),
         },
@@ -312,7 +328,7 @@ fn main() {
 
     if !pub_loc.is_empty() {
         left_items.push(KeyVal {
-            icon: "󰍹",
+            icon: ico_loc,
             key: "ʟᴏᴄᴀᴛɪᴏɴ".to_string(),
             value: pub_loc,
         });
@@ -325,7 +341,7 @@ fn main() {
             pub_isp
         };
         left_items.push(KeyVal {
-            icon: "󰒋",
+            icon: ico_isp,
             key: "ᴘʀᴏᴠɪᴅᴇʀ".to_string(),
             value: isp_short,
         });
@@ -338,18 +354,18 @@ fn main() {
     };
 
     left_items.push(KeyVal {
-        icon: "󰌘",
+        icon: ico_gw,
         key: "ɢᴀᴛᴇᴡᴀʏ".to_string(),
         value: gw_clean,
     });
     left_items.push(KeyVal {
-        icon: "󰒍",
+        icon: ico_dns,
         key: "ᴅɴs".to_string(),
         value: dns,
     });
     if let Some(ms) = internet_ping {
         left_items.push(KeyVal {
-            icon: "󰓅",
+            icon: ico_ping,
             key: "ᴘɪɴɢ".to_string(),
             value: format!("{C_GREEN}{ms:.1} ms{C_RESET} {C_MUTED}(1.1.1.1){C_RESET}"),
         });
@@ -357,7 +373,9 @@ fn main() {
 
     let mut right_items = Vec::new();
     for iface in ifaces {
-        let icon = if iface.kind == "Wi-Fi" {
+        let icon = if args.no_icons {
+            "●"
+        } else if iface.kind == "Wi-Fi" {
             "󰖩"
         } else if iface.kind == "VPN" {
             "󰞀"
@@ -407,9 +425,14 @@ fn main() {
 
     println!();
     let gap = "   │   ";
-    let left_hdr = format!("  {C_SUB}󰖟 ɪɴᴛᴇʀɴᴇᴛ & ʀᴏᴜᴛɪɴɢ{C_RESET}");
+    let (left_hdr_icon, right_hdr_icon) = if args.no_icons {
+        ("●", "●")
+    } else {
+        ("󰖟", "󰛳")
+    };
+    let left_hdr = format!("  {C_SUB}{left_hdr_icon} ɪɴᴛᴇʀɴᴇᴛ & ʀᴏᴜᴛɪɴɢ{C_RESET}");
     let left_hdr_pad = " ".repeat(left_max_w.saturating_sub(vlen(&left_hdr) - 2));
-    let right_hdr = format!("{C_SUB}󰛳 ʟᴏᴄᴀʟ ɪɴᴛᴇʀꜰᴀᴄᴇs{C_RESET}");
+    let right_hdr = format!("{C_SUB}{right_hdr_icon} ʟᴏᴄᴀʟ ɪɴᴛᴇʀꜰᴀᴄᴇs{C_RESET}");
     println!("{left_hdr}{left_hdr_pad}{C_MUTED}{gap}{C_RESET}{right_hdr}");
 
     for r in 0..max_rows {

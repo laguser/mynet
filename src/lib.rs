@@ -168,7 +168,30 @@ pub fn lookup_vendors_batch(macs: &[String]) -> HashMap<String, String> {
     results
 }
 
-pub fn get_device_icon(vendor: &str, hostname: &str, is_local: bool, is_gateway: bool) -> &'static str {
+pub fn should_disable_icons(cli_flag: bool) -> bool {
+    if cli_flag {
+        return true;
+    }
+    if let Ok(term) = std::env::var("TERM") {
+        if term == "linux" || term == "dumb" {
+            return true;
+        }
+    }
+    if std::env::var("NO_ICONS").is_ok() {
+        return true;
+    }
+    if let Ok(nf) = std::env::var("NERD_FONTS") {
+        if nf == "0" || nf == "false" || nf == "no" {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn get_device_icon(vendor: &str, hostname: &str, is_local: bool, is_gateway: bool, no_icons: bool) -> &'static str {
+    if no_icons {
+        return "●";
+    }
     let v_lower = vendor.to_lowercase();
     let h_lower = hostname.to_lowercase();
 

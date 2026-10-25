@@ -26,6 +26,11 @@ mynet -p
 # Machine-readable JSON output (for Waybar, scripts, jq)
 mynet --json
 myip --json
+
+# Safe fallback for standard fonts or Linux TTY console (no Nerd Font required)
+mynet --ni
+myip --ni
+# Or via env: NO_ICONS=1 mynet
 ```
 
 ## Install

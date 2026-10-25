@@ -27,24 +27,34 @@ struct Device {
 struct CliArgs {
     json: bool,
     ports: bool,
+    no_icons: bool,
     help: bool,
 }
 
 fn parse_args() -> CliArgs {
     let mut json = false;
     let mut ports = false;
+    let mut no_icons = false;
     let mut help = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-j" | "--json" => json = true,
             "-p" | "--ports" => ports = true,
+            "--no-icons" | "--ni" | "-n" => no_icons = true,
             "-h" | "--help" => help = true,
             _ => {}
         }
     }
 
-    CliArgs { json, ports, help }
+    no_icons = should_disable_icons(no_icons);
+
+    CliArgs {
+        json,
+        ports,
+        no_icons,
+        help,
+    }
 }
 
 fn print_help() {
@@ -55,9 +65,10 @@ fn print_help() {
     println!("{C_SUB}USAGE:{C_RESET}");
     println!("  mynet [options]\n");
     println!("{C_SUB}OPTIONS:{C_RESET}");
-    println!("  {C_TEXT}-p, --ports{C_RESET}    Scan and display common open ports (22, 53, 80, 443, etc.)");
-    println!("  {C_TEXT}-j, --json{C_RESET}     Output results as JSON (ideal for scripts, Waybar, Polybar)");
-    println!("  {C_TEXT}-h, --help{C_RESET}     Print this help message\n");
+    println!("  {C_TEXT}-p, --ports{C_RESET}         Scan and display common open ports (22, 53, 80, 443, etc.)");
+    println!("  {C_TEXT}--no-icons, --ni{C_RESET}    Disable Nerd Font icons (safe fallback for standard fonts / TTY)");
+    println!("  {C_TEXT}-j, --json{C_RESET}          Output results as JSON (ideal for scripts, Waybar, Polybar)");
+    println!("  {C_TEXT}-h, --help{C_RESET}          Print this help message\n");
 }
 
 struct LocalSubnet {
@@ -474,10 +485,12 @@ fn main() {
     for d in &dev_list {
         let is_gw = d.is_gateway;
         let is_vpn = d.interface.starts_with("vpn") || d.interface.starts_with("wg") || d.interface.starts_with("tun");
-        let icon = if is_vpn {
+        let icon = if args.no_icons {
+            "●"
+        } else if is_vpn {
             "󰞀"
         } else {
-            get_device_icon(&d.vendor, &d.hostname, d.is_local, is_gw)
+            get_device_icon(&d.vendor, &d.hostname, d.is_local, is_gw, false)
         };
 
         let icon_color = if is_gw {
@@ -518,7 +531,11 @@ fn main() {
         } else if d.is_local {
             format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ʟᴀɴ){C_RESET}")
         } else if is_gw {
-            format!("{C_SUB}󰒋 ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+            if args.no_icons {
+                format!("{C_SUB}[ɢᴡ] ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+            } else {
+                format!("{C_SUB}󰒋 ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+            }
         } else if d.hostname == "—" {
             format!("{C_MUTED}—{C_RESET}")
         } else {
