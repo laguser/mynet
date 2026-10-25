@@ -473,12 +473,12 @@ fn main() {
     if args.ports {
         println!(
             "    {C_MUTED}{:<16} {:<18} {:<10} {:<10} {:<24} {:<26} {}{C_RESET}",
-            "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ʟᴀᴛᴇɴᴄʏ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ", "ᴏᴘᴇɴ ᴘᴏʀᴛs"
+            "IP ADDRESS", "MAC ADDRESS", "INTERFACE", "LATENCY", "DEVICE / VENDOR", "HOSTNAME", "OPEN PORTS"
         );
     } else {
         println!(
             "    {C_MUTED}{:<16} {:<18} {:<10} {:<10} {:<24} {}{C_RESET}",
-            "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ʟᴀᴛᴇɴᴄʏ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ"
+            "IP ADDRESS", "MAC ADDRESS", "INTERFACE", "LATENCY", "DEVICE / VENDOR", "HOSTNAME"
         );
     }
 
@@ -527,14 +527,14 @@ fn main() {
         };
 
         let host_str = if d.is_local && is_vpn {
-            format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ᴠᴘɴ){C_RESET}")
+            format!("{C_GREEN}● this pc (vpn){C_RESET}")
         } else if d.is_local {
-            format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ʟᴀɴ){C_RESET}")
+            format!("{C_GREEN}● this pc (lan){C_RESET}")
         } else if is_gw {
             if args.no_icons {
-                format!("{C_SUB}[ɢᴡ] ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+                format!("{C_SUB}[GW] router / gateway{C_RESET}")
             } else {
-                format!("{C_SUB}󰒋 ʀᴏᴜᴛᴇʀ / ɢᴀᴛᴇᴡᴀʏ{C_RESET}")
+                format!("{C_SUB}󰒋 router / gateway{C_RESET}")
             }
         } else if d.hostname == "—" {
             format!("{C_MUTED}—{C_RESET}")

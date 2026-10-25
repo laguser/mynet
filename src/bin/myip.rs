@@ -321,7 +321,7 @@ fn main() {
     let mut left_items = vec![
         KeyVal {
             icon: ico_ip,
-            key: "ᴘᴜʙʟɪᴄ ɪᴘ".to_string(),
+            key: "PUBLIC IP".to_string(),
             value: format!("{C_BOLD}{pub_ip}{C_RESET}"),
         },
     ];
@@ -329,7 +329,7 @@ fn main() {
     if !pub_loc.is_empty() {
         left_items.push(KeyVal {
             icon: ico_loc,
-            key: "ʟᴏᴄᴀᴛɪᴏɴ".to_string(),
+            key: "LOCATION".to_string(),
             value: pub_loc,
         });
     }
@@ -342,7 +342,7 @@ fn main() {
         };
         left_items.push(KeyVal {
             icon: ico_isp,
-            key: "ᴘʀᴏᴠɪᴅᴇʀ".to_string(),
+            key: "PROVIDER".to_string(),
             value: isp_short,
         });
     }
@@ -355,18 +355,18 @@ fn main() {
 
     left_items.push(KeyVal {
         icon: ico_gw,
-        key: "ɢᴀᴛᴇᴡᴀʏ".to_string(),
+        key: "GATEWAY".to_string(),
         value: gw_clean,
     });
     left_items.push(KeyVal {
         icon: ico_dns,
-        key: "ᴅɴs".to_string(),
+        key: "DNS".to_string(),
         value: dns,
     });
     if let Some(ms) = internet_ping {
         left_items.push(KeyVal {
             icon: ico_ping,
-            key: "ᴘɪɴɢ".to_string(),
+            key: "PING".to_string(),
             value: format!("{C_GREEN}{ms:.1} ms{C_RESET} {C_MUTED}(1.1.1.1){C_RESET}"),
         });
     }
@@ -384,9 +384,9 @@ fn main() {
         };
 
         let status_badge = if iface.status == "UP" {
-            format!("{C_GREEN}● ᴜᴘ{C_RESET}")
+            format!("{C_GREEN}● UP{C_RESET}")
         } else {
-            format!("{C_MUTED}○ ᴅᴏᴡɴ{C_RESET}")
+            format!("{C_MUTED}○ DOWN{C_RESET}")
         };
 
         let label = format!("{} ({})", iface.name, iface.kind);
@@ -404,14 +404,14 @@ fn main() {
             let branch = if has_ipv6 { "├─" } else { "╰─" };
             right_items.push(KeyVal {
                 icon: "",
-                key: format!("{branch} ᴍᴀᴄ"),
+                key: format!("{branch} MAC"),
                 value: format!("{C_MUTED}{}{C_RESET}", iface.mac),
             });
         }
         if has_ipv6 {
             right_items.push(KeyVal {
                 icon: "",
-                key: "╰─ ɪᴘᴠ6".to_string(),
+                key: "╰─ IPv6".to_string(),
                 value: format!("{C_MUTED}{}{C_RESET}", iface.ipv6),
             });
         }
@@ -430,9 +430,9 @@ fn main() {
     } else {
         ("󰖟", "󰛳")
     };
-    let left_hdr = format!("  {C_SUB}{left_hdr_icon} ɪɴᴛᴇʀɴᴇᴛ & ʀᴏᴜᴛɪɴɢ{C_RESET}");
+    let left_hdr = format!("  {C_SUB}{left_hdr_icon} INTERNET & ROUTING{C_RESET}");
     let left_hdr_pad = " ".repeat(left_max_w.saturating_sub(vlen(&left_hdr) - 2));
-    let right_hdr = format!("{C_SUB}{right_hdr_icon} ʟᴏᴄᴀʟ ɪɴᴛᴇʀꜰᴀᴄᴇs{C_RESET}");
+    let right_hdr = format!("{C_SUB}{right_hdr_icon} LOCAL INTERFACES{C_RESET}");
     println!("{left_hdr}{left_hdr_pad}{C_MUTED}{gap}{C_RESET}{right_hdr}");
 
     for r in 0..max_rows {
