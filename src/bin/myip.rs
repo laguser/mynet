@@ -97,6 +97,59 @@ struct IfaceDetail {
     status: String,
 }
 
+#[derive(serde::Serialize)]
+struct MyIpJson {
+    public_ip: String,
+    location: String,
+    provider: String,
+    gateway: String,
+    dns: String,
+    ping_ms: Option<f64>,
+    interfaces: Vec<IfaceJson>,
+}
+
+#[derive(serde::Serialize)]
+struct IfaceJson {
+    name: String,
+    kind: String,
+    status: String,
+    ipv4: String,
+    ipv6: String,
+    mac: String,
+}
+
+struct CliArgs {
+    json: bool,
+    help: bool,
+}
+
+fn parse_args() -> CliArgs {
+    let mut json = false;
+    let mut help = false;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-j" | "--json" => json = true,
+            "-h" | "--help" => help = true,
+            _ => {}
+        }
+    }
+
+    CliArgs { json, help }
+}
+
+fn print_help() {
+    println!(
+        "{C_BOLD}{C_ACCENT}myip{C_RESET} {C_MUTED}v{} - Minimal CLI IP & network auditor{C_RESET}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("{C_SUB}USAGE:{C_RESET}");
+    println!("  myip [options]\n");
+    println!("{C_SUB}OPTIONS:{C_RESET}");
+    println!("  {C_TEXT}-j, --json{C_RESET}     Output results as JSON (ideal for scripts, Waybar, Polybar)");
+    println!("  {C_TEXT}-h, --help{C_RESET}     Print this help message\n");
+}
+
 fn get_interfaces() -> Vec<IfaceDetail> {
     let mut results = Vec::new();
     let interfaces = pnet_datalink::interfaces();
@@ -176,35 +229,78 @@ fn render_row(k: &KeyVal, key_width: usize) -> String {
 }
 
 fn main() {
+    let args = parse_args();
+    if args.help {
+        print_help();
+        return;
+    }
+
     let stop_spinner = Arc::new(AtomicBool::new(false));
     let stop_spinner_clone = stop_spinner.clone();
 
-    print!("\x1b[?25l");
-    let spinner_handle = thread::spawn(move || {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let mut idx = 0;
-        while !stop_spinner_clone.load(Ordering::Relaxed) {
-            let f = frames[idx % frames.len()];
-            print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}querying network...{C_RESET} ");
+    let spinner_handle = if !args.json {
+        print!("\x1b[?25l");
+        Some(thread::spawn(move || {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut idx = 0;
+            while !stop_spinner_clone.load(Ordering::Relaxed) {
+                let f = frames[idx % frames.len()];
+                print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}querying network...{C_RESET} ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                idx += 1;
+                thread::sleep(Duration::from_millis(50));
+            }
+            print!("\r\x1b[2K\x1b[?25h");
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            idx += 1;
-            thread::sleep(Duration::from_millis(50));
-        }
-        print!("\r\x1b[2K\x1b[?25h");
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-    });
+        }))
+    } else {
+        None
+    };
 
     let ifaces_handle = thread::spawn(get_interfaces);
     let route_handle = thread::spawn(get_dns_and_gateway);
+    let ping_handle = thread::spawn(measure_internet_ping);
     let (pub_ip, pub_loc, pub_isp) = fetch_public_ip();
 
     let ifaces = ifaces_handle.join().unwrap_or_default();
     let (dns, gateway) = route_handle.join().unwrap_or_else(|_| ("—".to_string(), "—".to_string()));
+    let internet_ping = ping_handle.join().unwrap_or(None);
 
-    stop_spinner.store(true, Ordering::Relaxed);
-    let _ = spinner_handle.join();
+    if let Some(handle) = spinner_handle {
+        stop_spinner.store(true, Ordering::Relaxed);
+        let _ = handle.join();
+    }
+
+    if args.json {
+        let json_ifaces: Vec<IfaceJson> = ifaces
+            .into_iter()
+            .map(|i| IfaceJson {
+                name: i.name,
+                kind: i.kind.to_string(),
+                status: i.status,
+                ipv4: i.ipv4,
+                ipv6: i.ipv6,
+                mac: i.mac,
+            })
+            .collect();
+
+        let my_ip_json = MyIpJson {
+            public_ip: pub_ip,
+            location: pub_loc,
+            provider: pub_isp,
+            gateway,
+            dns,
+            ping_ms: internet_ping,
+            interfaces: json_ifaces,
+        };
+
+        if let Ok(s) = serde_json::to_string_pretty(&my_ip_json) {
+            println!("{s}");
+        }
+        return;
+    }
 
     let mut left_items = vec![
         KeyVal {
@@ -251,6 +347,13 @@ fn main() {
         key: "ᴅɴs".to_string(),
         value: dns,
     });
+    if let Some(ms) = internet_ping {
+        left_items.push(KeyVal {
+            icon: "󰓅",
+            key: "ᴘɪɴɢ".to_string(),
+            value: format!("{C_GREEN}{ms:.1} ms{C_RESET} {C_MUTED}(1.1.1.1){C_RESET}"),
+        });
+    }
 
     let mut right_items = Vec::new();
     for iface in ifaces {

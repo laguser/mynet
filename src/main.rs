@@ -11,14 +11,53 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct Device {
     ip: String,
     mac: String,
     vendor: String,
     hostname: String,
     interface: String,
+    latency_ms: Option<f64>,
+    open_ports: Vec<u16>,
     is_local: bool,
+    is_gateway: bool,
+}
+
+struct CliArgs {
+    json: bool,
+    ports: bool,
+    help: bool,
+}
+
+fn parse_args() -> CliArgs {
+    let mut json = false;
+    let mut ports = false;
+    let mut help = false;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-j" | "--json" => json = true,
+            "-p" | "--ports" => ports = true,
+            "-h" | "--help" => help = true,
+            _ => {}
+        }
+    }
+
+    CliArgs { json, ports, help }
+}
+
+fn print_help() {
+    println!(
+        "{C_BOLD}{C_ACCENT}mynet{C_RESET} {C_MUTED}v{} - Minimal CLI LAN device discoverer{C_RESET}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("{C_SUB}USAGE:{C_RESET}");
+    println!("  mynet [options]\n");
+    println!("{C_SUB}OPTIONS:{C_RESET}");
+    println!("  {C_TEXT}-p, --ports{C_RESET}    Scan and display common open ports (22, 53, 80, 443, etc.)");
+    println!("  {C_TEXT}-j, --json{C_RESET}     Output results as JSON (ideal for scripts, Waybar, Polybar)");
+    println!("  {C_TEXT}-h, --help{C_RESET}     Print this help message\n");
 }
 
 struct LocalSubnet {
@@ -127,7 +166,10 @@ fn get_neighbor_devices() -> HashMap<String, Device> {
                             vendor: String::new(),
                             hostname: String::new(),
                             interface: dev.to_string(),
+                            latency_ms: None,
+                            open_ports: Vec::new(),
                             is_local: false,
+                            is_gateway: false,
                         },
                     );
                 }
@@ -163,7 +205,10 @@ fn get_neighbor_devices() -> HashMap<String, Device> {
                                 vendor: String::new(),
                                 hostname: String::new(),
                                 interface: iface.to_string(),
+                                latency_ms: None,
+                                open_ports: Vec::new(),
                                 is_local: false,
+                                is_gateway: false,
                             },
                         );
                     }
@@ -189,7 +234,10 @@ fn get_neighbor_devices() -> HashMap<String, Device> {
                             vendor: String::new(),
                             hostname: String::new(),
                             interface: iface.name.clone(),
+                            latency_ms: None,
+                            open_ports: Vec::new(),
                             is_local: true,
+                            is_gateway: false,
                         },
                     );
                 }
@@ -218,25 +266,35 @@ fn lookup_hostname_fast(ip_str: &str) -> String {
 }
 
 fn main() {
+    let args = parse_args();
+    if args.help {
+        print_help();
+        return;
+    }
+
     let stop_spinner = Arc::new(AtomicBool::new(false));
     let stop_spinner_clone = stop_spinner.clone();
 
-    print!("\x1b[?25l");
-    let spinner_handle = thread::spawn(move || {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let mut idx = 0;
-        while !stop_spinner_clone.load(Ordering::Relaxed) {
-            let f = frames[idx % frames.len()];
-            print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}scanning network...{C_RESET} ");
+    let spinner_handle = if !args.json {
+        print!("\x1b[?25l");
+        Some(thread::spawn(move || {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut idx = 0;
+            while !stop_spinner_clone.load(Ordering::Relaxed) {
+                let f = frames[idx % frames.len()];
+                print!("\r  {C_ACCENT}{f}{C_RESET} {C_MUTED}scanning network...{C_RESET} ");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                idx += 1;
+                thread::sleep(Duration::from_millis(50));
+            }
+            print!("\r\x1b[2K\x1b[?25h");
             use std::io::Write;
             let _ = std::io::stdout().flush();
-            idx += 1;
-            thread::sleep(Duration::from_millis(50));
-        }
-        print!("\r\x1b[2K\x1b[?25h");
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-    });
+        }))
+    } else {
+        None
+    };
 
     let subnets = get_local_subnets();
     trigger_arp_sweep(&subnets);
@@ -247,9 +305,15 @@ fn main() {
     let dev_map = get_neighbor_devices();
 
     if dev_map.is_empty() {
-        stop_spinner.store(true, Ordering::Relaxed);
-        let _ = spinner_handle.join();
-        println!("  {C_MUTED}no devices found{C_RESET}\n");
+        if let Some(handle) = spinner_handle {
+            stop_spinner.store(true, Ordering::Relaxed);
+            let _ = handle.join();
+        }
+        if args.json {
+            println!("[]");
+        } else {
+            println!("  {C_MUTED}no devices found{C_RESET}\n");
+        }
         return;
     }
 
@@ -259,37 +323,69 @@ fn main() {
     let mut dev_list: Vec<Device> = dev_map.into_values().collect();
     let all_macs: Vec<String> = dev_list.iter().map(|d| d.mac.clone()).collect();
 
-    // Batch resolve all vendors in <2ms + parallel hostnames in <=80ms
+    // Batch resolve all vendors in <2ms + parallel hostnames and latency/ports
     let vendor_map = lookup_vendors_batch(&all_macs);
 
     dev_list.par_iter_mut().for_each(|d| {
-        d.vendor = vendor_map
+        let is_vpn = d.interface.starts_with("vpn") || d.interface.starts_with("wg") || d.interface.starts_with("tun");
+        let raw_vendor = vendor_map
             .get(&d.mac)
             .cloned()
             .unwrap_or_else(|| "Unknown".to_string());
 
+        d.vendor = if is_vpn && (raw_vendor == "—" || raw_vendor == "Unknown") {
+            "VPN Tunnel".to_string()
+        } else {
+            raw_vendor
+        };
+
+        let is_gw = d.ip == gw_ip;
+        d.is_gateway = is_gw;
+
         if d.is_local {
             d.hostname = "this machine".to_string();
-        } else if d.ip == gw_ip {
+        } else if is_gw {
             d.hostname = "router".to_string();
         } else {
             d.hostname = lookup_hostname_fast(&d.ip);
         }
+
+        if let Ok(ip4) = d.ip.parse::<Ipv4Addr>() {
+            let (lat, ports) = probe_ports_and_latency(ip4, &d.interface, d.is_local, args.ports || args.json);
+            d.latency_ms = lat;
+            d.open_ports = ports;
+        }
     });
 
-    stop_spinner.store(true, Ordering::Relaxed);
-    let _ = spinner_handle.join();
+    if let Some(handle) = spinner_handle {
+        stop_spinner.store(true, Ordering::Relaxed);
+        let _ = handle.join();
+    }
 
     dev_list.sort_by_key(|d| d.ip.parse::<Ipv4Addr>().unwrap_or(Ipv4Addr::UNSPECIFIED));
 
+    if args.json {
+        if let Ok(json_str) = serde_json::to_string_pretty(&dev_list) {
+            println!("{json_str}");
+        }
+        return;
+    }
+
     println!();
-    println!(
-        "    {C_MUTED}{:<16} {:<18} {:<10} {:<24} {}{C_RESET}",
-        "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ"
-    );
+    if args.ports {
+        println!(
+            "    {C_MUTED}{:<16} {:<18} {:<10} {:<10} {:<24} {:<26} {}{C_RESET}",
+            "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ʟᴀᴛᴇɴᴄʏ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ", "ᴏᴘᴇɴ ᴘᴏʀᴛs"
+        );
+    } else {
+        println!(
+            "    {C_MUTED}{:<16} {:<18} {:<10} {:<10} {:<24} {}{C_RESET}",
+            "ɪᴘ ᴀᴅᴅʀᴇss", "ᴍᴀᴄ ᴀᴅᴅʀᴇss", "ɪɴᴛᴇʀꜰᴀᴄᴇ", "ʟᴀᴛᴇɴᴄʏ", "ᴅᴇᴠɪᴄᴇ / ᴠᴇɴᴅᴏʀ", "ʜᴏsᴛɴᴀᴍᴇ"
+        );
+    }
 
     for d in &dev_list {
-        let is_gw = d.ip == gw_ip;
+        let is_gw = d.is_gateway;
         let is_vpn = d.interface.starts_with("vpn") || d.interface.starts_with("wg") || d.interface.starts_with("tun");
         let icon = if is_vpn {
             "󰞀"
@@ -313,6 +409,10 @@ fn main() {
         let mac_col = format!("{C_MUTED}{:<18}{C_RESET}", d.mac);
         let iface_col = format!("{C_SUB}{:<10}{C_RESET}", d.interface);
 
+        let lat_str = format_latency(d.latency_ms);
+        let lat_pad = " ".repeat(10usize.saturating_sub(vlen(&lat_str)));
+        let lat_col = format!("{lat_str}{lat_pad}");
+
         let vendor_str = if is_vpn && d.vendor == "—" {
             "VPN Tunnel".to_string()
         } else if d.vendor.len() > 23 {
@@ -326,7 +426,7 @@ fn main() {
             format!("{C_ACCENT}{:<24}{C_RESET}", vendor_str)
         };
 
-        let host_col = if d.is_local && is_vpn {
+        let host_str = if d.is_local && is_vpn {
             format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ᴠᴘɴ){C_RESET}")
         } else if d.is_local {
             format!("{C_GREEN}● ᴛʜɪs ᴘᴄ (ʟᴀɴ){C_RESET}")
@@ -338,7 +438,27 @@ fn main() {
             format!("{C_TEXT}{}{C_RESET}", d.hostname)
         };
 
-        println!("  {icon_color}{icon}{C_RESET} {ip_col} {mac_col} {iface_col} {vendor_col} {host_col}");
+        if args.ports {
+            let host_pad = " ".repeat(26usize.saturating_sub(vlen(&host_str)));
+            let host_col = format!("{host_str}{host_pad}");
+
+            let ports_col = if d.open_ports.is_empty() {
+                format!("{C_MUTED}—{C_RESET}")
+            } else {
+                let parts: Vec<String> = d
+                    .open_ports
+                    .iter()
+                    .map(|p| {
+                        let svc = port_service_name(*p);
+                        format!("{C_SUB}{p}{C_MUTED}({svc}){C_RESET}")
+                    })
+                    .collect();
+                parts.join(", ")
+            };
+            println!("  {icon_color}{icon}{C_RESET} {ip_col} {mac_col} {iface_col} {lat_col} {vendor_col} {host_col} {ports_col}");
+        } else {
+            println!("  {icon_color}{icon}{C_RESET} {ip_col} {mac_col} {iface_col} {lat_col} {vendor_col} {host_str}");
+        }
     }
 
     println!();

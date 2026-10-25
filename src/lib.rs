@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::net::Ipv4Addr;
+use std::time::Instant;
 
 pub const C_ACCENT: &str = "\x1b[35m";   // Magenta / Purple (Primary accent)
 pub const C_SUB: &str = "\x1b[36m";      // Cyan / Blue (Secondary accent)
@@ -216,4 +218,158 @@ pub fn get_dns_and_gateway() -> (String, String) {
     }
 
     (dns_str, gw_str)
+}
+
+pub fn port_service_name(port: u16) -> &'static str {
+    match port {
+        22 => "ssh",
+        53 => "dns",
+        80 => "http",
+        443 => "https",
+        445 => "smb",
+        3000 => "dev",
+        5000 => "upnp",
+        8000 => "http-alt",
+        8080 => "http-alt",
+        8443 => "https-alt",
+        9090 => "cockpit",
+        _ => "svc",
+    }
+}
+
+pub fn format_latency(lat: Option<f64>) -> String {
+    match lat {
+        Some(ms) if ms < 0.1 => format!("{C_GREEN}<0.1 ms{C_RESET}"),
+        Some(ms) if ms < 5.0 => format!("{C_GREEN}{ms:>4.1} ms{C_RESET}"),
+        Some(ms) if ms < 50.0 => format!("{C_SUB}{ms:>4.1} ms{C_RESET}"),
+        Some(ms) => format!("{C_ACCENT}{ms:>4.1} ms{C_RESET}"),
+        None => format!("{C_MUTED}      —{C_RESET}"),
+    }
+}
+
+pub fn probe_ports_and_latency(
+    ip: Ipv4Addr,
+    iface: &str,
+    is_local: bool,
+    scan_ports: bool,
+) -> (Option<f64>, Vec<u16>) {
+    if is_local {
+        return (Some(0.04), Vec::new());
+    }
+
+    let target_ports: &[u16] = if scan_ports {
+        &[22, 53, 80, 443, 445, 3000, 5000, 8000, 8080, 8443, 9090]
+    } else {
+        &[22, 53, 80, 443, 445]
+    };
+
+    let mut open_ports = Vec::new();
+    let mut best_latency: Option<f64> = None;
+
+    let mut iface_bytes = iface.as_bytes().to_vec();
+    iface_bytes.push(0);
+
+    let t0 = Instant::now();
+    let mut active_sockets: Vec<(libc::c_int, u16)> = Vec::new();
+    let mut pfds: Vec<libc::pollfd> = Vec::new();
+
+    unsafe {
+        for &port in target_ports {
+            let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
+            if fd < 0 {
+                continue;
+            }
+
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_BINDTODEVICE,
+                iface_bytes.as_ptr() as *const libc::c_void,
+                iface_bytes.len() as libc::socklen_t,
+            );
+
+            let mut sin: libc::sockaddr_in = std::mem::zeroed();
+            sin.sin_family = libc::AF_INET as libc::sa_family_t;
+            sin.sin_port = port.to_be();
+            sin.sin_addr.s_addr = u32::from(ip).to_be();
+
+            let res = libc::connect(
+                fd,
+                &sin as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            );
+
+            if res == 0 {
+                let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                open_ports.push(port);
+                best_latency = Some(best_latency.map_or(dt, |b: f64| b.min(dt)));
+                libc::close(fd);
+            } else {
+                let err = *libc::__errno_location();
+                if err == libc::EINPROGRESS {
+                    active_sockets.push((fd, port));
+                    pfds.push(libc::pollfd {
+                        fd,
+                        events: libc::POLLOUT | libc::POLLERR,
+                        revents: 0,
+                    });
+                } else {
+                    if err == libc::ECONNREFUSED {
+                        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                        best_latency = Some(best_latency.map_or(dt, |b: f64| b.min(dt)));
+                    }
+                    libc::close(fd);
+                }
+            }
+        }
+
+        if !pfds.is_empty() {
+            let timeout_ms = if scan_ports { 60 } else { 40 };
+            let poll_res = libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, timeout_ms);
+            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+
+            if poll_res > 0 {
+                for i in 0..pfds.len() {
+                    let revents = pfds[i].revents;
+                    let (fd, port) = active_sockets[i];
+                    if (revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP)) != 0 {
+                        let mut optval: libc::c_int = 0;
+                        let mut optlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+                        libc::getsockopt(
+                            fd,
+                            libc::SOL_SOCKET,
+                            libc::SO_ERROR,
+                            &mut optval as *mut libc::c_int as *mut libc::c_void,
+                            &mut optlen,
+                        );
+                        if optval == 0 {
+                            open_ports.push(port);
+                            best_latency = Some(best_latency.map_or(dt, |b: f64| b.min(dt)));
+                        } else if optval == libc::ECONNREFUSED {
+                            best_latency = Some(best_latency.map_or(dt, |b: f64| b.min(dt)));
+                        }
+                    }
+                }
+            }
+
+            for (fd, _) in active_sockets {
+                libc::close(fd);
+            }
+        }
+    }
+
+    open_ports.sort_unstable();
+    (best_latency, open_ports)
+}
+
+pub fn measure_internet_ping() -> Option<f64> {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let target: SocketAddr = "1.1.1.1:53".parse().ok()?;
+    let t0 = Instant::now();
+    match TcpStream::connect_timeout(&target, Duration::from_millis(600)) {
+        Ok(_) => Some(t0.elapsed().as_secs_f64() * 1000.0),
+        Err(_) => None,
+    }
 }
