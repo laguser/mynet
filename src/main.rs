@@ -83,20 +83,25 @@ fn trigger_arp_sweep(subnets: &[LocalSubnet]) {
         }
 
         if let Ok(socket) = UdpSocket::bind(SocketAddrV4::new(sn.local_ip, 0)) {
+            let _ = socket.set_nonblocking(true);
             bind_socket_to_interface(&socket, &sn.iface_name);
             let _ = socket.set_broadcast(true);
-            let _ = socket.set_nonblocking(true);
 
-            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
+            // Multicast & Broadcast discovery signals (mDNS + NetBIOS + UDP echo)
             let bcast = Ipv4Addr::from(net_u32 | !mask_u32);
+            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353));
+            let _ = socket.send_to(b"", SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 1), 55555));
+            let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 137));
             let _ = socket.send_to(b"", SocketAddrV4::new(bcast, 55555));
 
-            // Ultra-fast single pass with tiny 3ms micro-pacing every 64 hosts (~12ms total)
+            // Multi-vector probes (mDNS + NetBIOS + high UDP) to awaken all types of devices
             for i in 1..host_count {
                 let target_ip = Ipv4Addr::from(net_u32 + i);
+                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 5353));
+                let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 137));
                 let _ = socket.send_to(b"", SocketAddrV4::new(target_ip, 55555));
-                if i % 64 == 0 {
-                    thread::sleep(Duration::from_millis(3));
+                if i % 32 == 0 {
+                    thread::sleep(Duration::from_millis(4));
                 }
             }
         }
@@ -236,8 +241,8 @@ fn main() {
     let subnets = get_local_subnets();
     trigger_arp_sweep(&subnets);
 
-    // Minimal 60ms wait for local LAN ARP replies (<2ms on Ethernet/Wi-Fi)
-    thread::sleep(Duration::from_millis(60));
+    // 100ms wait ensures even sleeping Wi-Fi / power-saving mobile devices reply
+    thread::sleep(Duration::from_millis(100));
 
     let dev_map = get_neighbor_devices();
 
